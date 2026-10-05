@@ -4,7 +4,7 @@ export default function App() {
   return (
     <main style={{ fontFamily: 'sans-serif', textAlign: 'center', marginTop: 80 }}>
       <h1>Hello from Azure Blob Storage + Front Door CDN</h1>
-      <p>Deployed by Azure DevOps Pipelines</p>
+      <p>Deployed by Azure DevOps</p>
       <button onClick={() => setN(n + 1)}>Clicked {n} times</button>
     </main>
   );
