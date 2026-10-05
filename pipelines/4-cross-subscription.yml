@@ -1,0 +1,60 @@
+# Build + push image in Subscription A, deploy to Container App in Subscription B
+trigger:
+  branches: { include: [main] }
+  paths:    { include: [node-app/*] }
+
+pool:
+  name: Default
+
+variables:
+  subA: sc-lab-sub-a          # service connection -> Subscription A
+  subB: sc-lab-sub-b          # service connection -> Subscription B
+  acr: acrlabcinx7k2
+  image: nodeapp-xsub
+  rgB: rg-lab-crosssub-cin
+  appB: ca-lab-xsub-cin
+
+stages:
+- stage: BuildInSubA
+  jobs:
+  - job: Push
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(subA)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az account show --query "{sub:name,id:id}" -o table
+          az acr login --name $(acr)
+          docker build -t $(acr).azurecr.io/$(image):$(Build.BuildId) node-app
+          docker push $(acr).azurecr.io/$(image):$(Build.BuildId)
+
+- stage: DeployToSubB
+  dependsOn: BuildInSubA
+  jobs:
+  - job: Deploy
+    steps:
+    - task: AzureCLI@2
+      displayName: Deploy to Container App in Subscription B
+      inputs:
+        azureSubscription: $(subB)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az account show --query "{sub:name,id:id}" -o table
+          az extension add --name containerapp --upgrade -y
+          az containerapp update -n $(appB) -g $(rgB) --image $(acr).azurecr.io/$(image):$(Build.BuildId)
+    - task: AzureCLI@2
+      displayName: Validate cross-subscription deployment
+      inputs:
+        azureSubscription: $(subB)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          FQDN=$(az containerapp show -n $(appB) -g $(rgB) --query properties.configuration.ingress.fqdn -o tsv)
+          for i in $(seq 1 15); do
+            if curl -sf "https://$FQDN/health" | grep -q OK; then echo "PASSED: https://$FQDN"; exit 0; fi
+            sleep 20
+          done
+          exit 1

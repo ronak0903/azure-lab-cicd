@@ -1,0 +1,7 @@
+{
+  "name": "lab-node-app",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node --check server.js && echo smoke ok" },
+  "dependencies": { "express": "^4.19.2" }
+}

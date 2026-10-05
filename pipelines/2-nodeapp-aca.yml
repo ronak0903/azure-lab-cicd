@@ -1,0 +1,73 @@
+# Node.js -> Docker image -> ACR -> Azure Container Apps -> validate
+trigger:
+  branches: { include: [main] }
+  paths:    { include: [node-app/*] }
+
+pool:
+  name: Default
+
+variables:
+  azureSub: sc-lab-sub-a
+  rg: rg-lab-containers-cin
+  acr: acrlabcinx7k2
+  image: nodeapp
+  app: ca-lab-nodeapp-cin
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildNode
+    steps:
+    - task: NodeTool@0
+      inputs: { versionSpec: '20.x' }
+    - script: |
+        npm install
+        npm test
+      workingDirectory: node-app
+      displayName: Install and test
+
+- stage: Image
+  dependsOn: Build
+  jobs:
+  - job: PushImage
+    steps:
+    - task: AzureCLI@2
+      displayName: Build and push to ACR
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr login --name $(acr)
+          docker build -t $(acr).azurecr.io/$(image):$(Build.BuildId) node-app
+          docker push $(acr).azurecr.io/$(image):$(Build.BuildId)
+
+- stage: Deploy
+  dependsOn: Image
+  jobs:
+  - job: DeployAndValidate
+    steps:
+    - task: AzureCLI@2
+      displayName: Deploy to Container Apps
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az extension add --name containerapp --upgrade -y
+          az containerapp update -n $(app) -g $(rg) \
+            --image $(acr).azurecr.io/$(image):$(Build.BuildId) \
+            --set-env-vars APP_VERSION=$(Build.BuildId)
+    - task: AzureCLI@2
+      displayName: Validate
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          FQDN=$(az containerapp show -n $(app) -g $(rg) --query properties.configuration.ingress.fqdn -o tsv)
+          for i in $(seq 1 15); do
+            if curl -sf "https://$FQDN/health" | grep -q OK; then echo "PASSED: https://$FQDN"; curl -s "https://$FQDN/"; exit 0; fi
+            echo "attempt $i failed"; sleep 20
+          done
+          exit 1

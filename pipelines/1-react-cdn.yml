@@ -1,0 +1,61 @@
+# React -> Blob static website -> Front Door CDN -> validate
+trigger:
+  branches: { include: [main] }
+  paths:    { include: [react-app/*] }
+
+pool:
+  name: Default
+
+variables:
+  azureSub: sc-lab-sub-a
+  rg: rg-lab-web-cin
+  storage: stlabwebcinx7k2
+  afdProfile: afd-lab-cin
+  afdEndpoint: fde-lab-web-cin-x7k2
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildReact
+    steps:
+    - task: NodeTool@0
+      inputs: { versionSpec: '20.x' }
+    - script: |
+        npm install
+        npm run build
+      workingDirectory: react-app
+      displayName: Build React
+    - publish: react-app/dist
+      artifact: dist
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - job: DeployAndValidate
+    steps:
+    - download: current
+      artifact: dist
+    - task: AzureCLI@2
+      displayName: Upload to $web
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az storage blob upload-batch --account-name $(storage) --auth-mode key \
+            -d '$web' -s "$(Pipeline.Workspace)/dist" --overwrite
+    - task: AzureCLI@2
+      displayName: Validate static website URL
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          URL=$(az storage account show -n $(storage) -g $(rg) --query primaryEndpoints.web -o tsv)
+          echo "Website URL: $URL"
+          for i in $(seq 1 10); do
+            if curl -sf "$URL" | grep -q "Azure DevOps Lab"; then echo "VALIDATION PASSED"; exit 0; fi
+            sleep 10
+          done
+          exit 1
+    # TODO: add Front Door purge + CDN-URL validation once an AFD profile exists

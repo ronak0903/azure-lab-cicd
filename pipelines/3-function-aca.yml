@@ -1,0 +1,58 @@
+# Node Function image -> ACR -> Function App hosted on Container Apps -> validate
+trigger:
+  branches: { include: [main] }
+  paths:    { include: [function-app/*] }
+
+pool:
+  name: Default
+
+variables:
+  azureSub: sc-lab-sub-a
+  rg: rg-lab-containers-cin
+  acr: acrlabcinx7k2
+  image: funcapp
+  funcApp: ca-lab-func-cin
+
+stages:
+- stage: Image
+  jobs:
+  - job: PushImage
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az acr login --name $(acr)
+          docker build -t $(acr).azurecr.io/$(image):$(Build.BuildId) function-app
+          docker push $(acr).azurecr.io/$(image):$(Build.BuildId)
+
+- stage: Deploy
+  dependsOn: Image
+  jobs:
+  - job: DeployAndValidate
+    steps:
+    - task: AzureCLI@2
+      displayName: Point Function App (on Container Apps) to new image
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az extension add --name containerapp --upgrade -y
+          az containerapp update -n $(funcApp) -g $(rg) \
+            --image $(acr).azurecr.io/$(image):$(Build.BuildId)
+    - task: AzureCLI@2
+      displayName: Validate
+      inputs:
+        azureSubscription: $(azureSub)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          HOST=$(az containerapp show -n $(funcApp) -g $(rg) --query properties.configuration.ingress.fqdn -o tsv)
+          for i in $(seq 1 20); do
+            if curl -sf "https://$HOST/api/hello" | grep -q "Function App"; then echo "PASSED: https://$HOST/api/hello"; exit 0; fi
+            echo "attempt $i failed"; sleep 30
+          done
+          exit 1
